@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>OpenAPI仕様書スケルトンビルダー</title>
+<script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-900 text-white min-h-screen flex flex-col p-4">
+<h1 class="text-xl font-bold mb-1 text-center">📋 OpenAPI スペックビルダー</h1>
+<p class="text-gray-400 text-sm mb-4 text-center">エンドポイントを追加してOpenAPI 3.0 YAMLを自動生成</p>
+
+<div class="flex gap-4 max-w-5xl mx-auto w-full flex-wrap lg:flex-nowrap">
+  <!-- Left panel: form -->
+  <div class="flex-1 min-w-80">
+    <div class="bg-gray-800 rounded-xl p-4 mb-4">
+      <h2 class="text-sm font-bold text-gray-300 mb-3">API基本情報</h2>
+      <div class="space-y-2">
+        <input id="apiTitle" type="text" placeholder="API名" value="My API"
+          class="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-sm">
+        <input id="apiVersion" type="text" placeholder="バージョン" value="1.0.0"
+          class="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-sm">
+        <input id="baseUrl" type="text" placeholder="ベースURL" value="https://api.example.com"
+          class="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-sm">
+        <select id="auth" class="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-sm">
+          <option value="none">認証なし</option>
+          <option value="bearer">Bearer Token</option>
+          <option value="apikey">API Key</option>
+          <option value="basic">Basic Auth</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="bg-gray-800 rounded-xl p-4 mb-4">
+      <h2 class="text-sm font-bold text-gray-300 mb-3">エンドポイント追加</h2>
+      <div class="space-y-2">
+        <div class="flex gap-2">
+          <select id="method" class="bg-gray-700 border border-gray-600 rounded px-2 py-2 text-sm font-bold w-24">
+            <option value="get" class="text-green-400">GET</option>
+            <option value="post" class="text-blue-400">POST</option>
+            <option value="put" class="text-yellow-400">PUT</option>
+            <option value="patch" class="text-orange-400">PATCH</option>
+            <option value="delete" class="text-red-400">DELETE</option>
+          </select>
+          <input id="path" type="text" placeholder="/users/{id}" value="/users"
+            class="flex-1 bg-gray-700 border border-gray-600 rounded px-3 py-2 text-sm font-mono">
+        </div>
+        <input id="summary" type="text" placeholder="概要" value="ユーザー一覧を取得"
+          class="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-sm">
+        <select id="respCode" class="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-sm">
+          <option value="200">200 OK</option>
+          <option value="201">201 Created</option>
+          <option value="204">204 No Content</option>
+          <option value="400">400 Bad Request</option>
+          <option value="404">404 Not Found</option>
+        </select>
+        <button id="addEndpoint" class="w-full bg-blue-600 hover:bg-blue-500 rounded px-4 py-2 text-sm font-bold transition">+ エンドポイント追加</button>
+      </div>
+    </div>
+
+    <div id="endpointList" class="space-y-2"></div>
+  </div>
+
+  <!-- Right panel: YAML output -->
+  <div class="flex-1 min-w-80">
+    <div class="bg-gray-800 rounded-xl p-4">
+      <div class="flex justify-between items-center mb-2">
+        <span class="text-sm font-bold text-gray-300">OpenAPI 3.0 YAML</span>
+        <div class="flex gap-2">
+          <button id="copyYaml" class="text-xs bg-gray-700 hover:bg-gray-600 px-3 py-1 rounded transition">📋 コピー</button>
+          <button id="dlYaml" class="text-xs bg-gray-700 hover:bg-gray-600 px-3 py-1 rounded transition">💾 DL</button>
+        </div>
+      </div>
+      <pre id="yamlOutput" class="text-xs font-mono text-green-300 overflow-auto max-h-[500px] whitespace-pre"></pre>
+    </div>
+  </div>
+</div>
+
+<script>
+let endpoints=[];
+function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+const METHOD_COLORS={get:'text-green-400',post:'text-blue-400',put:'text-yellow-400',patch:'text-orange-400',delete:'text-red-400'};
+
+function generateYaml(){
+  const title=document.getElementById('apiTitle').value||'My API';
+  const version=document.getElementById('apiVersion').value||'1.0.0';
+  const baseUrl=document.getElementById('baseUrl').value||'https://api.example.com';
+  const auth=document.getElementById('auth').value;
+
+  let yaml=`openapi: "3.0.3"
+info:
+  title: "${title}"
+  version: "${version}"
+servers:
+  - url: "${baseUrl}"
+    description: Main server
+`;
+
+  if(auth!=='none'){
+    yaml+=`\ncomponents:\n  securitySchemes:\n`;
+    if(auth==='bearer') yaml+=`    bearerAuth:\n      type: http\n      scheme: bearer\n      bearerFormat: JWT\n`;
+    else if(auth==='apikey') yaml+=`    apiKeyAuth:\n      type: apiKey\n      in: header\n      name: X-API-Key\n`;
+    else if(auth==='basic') yaml+=`    basicAuth:\n      type: http\n      scheme: basic\n`;
+  }
+
+  if(endpoints.length===0){ yaml+='\npaths: {}\n'; }
+  else {
+    yaml+='\npaths:\n';
+    // Group by path
+    const byPath={};
+    for(const ep of endpoints){
+      if(!byPath[ep.path]) byPath[ep.path]={};
+      byPath[ep.path][ep.method]=ep;
+    }
+    for(const [path,methods] of Object.entries(byPath)){
+      yaml+=`  ${path}:\n`;
+      for(const [method,ep] of Object.entries(methods)){
+        yaml+=`    ${method}:\n`;
+        yaml+=`      summary: "${ep.summary}"\n`;
+        if(auth!=='none') yaml+=`      security:\n        - ${auth==='bearer'?'bearerAuth':auth==='apikey'?'apiKeyAuth':'basicAuth'}: []\n`;
+        // Path params
+        const params=path.match(/\{(\w+)\}/g);
+        if(params){
+          yaml+=`      parameters:\n`;
+          for(const p of params){
+            const name=p.slice(1,-1);
+            yaml+=`        - name: ${name}\n          in: path\n          required: true\n          schema:\n            type: string\n`;
+          }
+        }
+        yaml+=`      responses:\n`;
+        yaml+=`        "${ep.respCode}":\n`;
+        yaml+=`          description: "${ep.respCode==='200'?'Success':ep.respCode==='201'?'Created':ep.respCode==='204'?'No Content':ep.respCode==='400'?'Bad Request':'Not Found'}"\n`;
+        if(ep.respCode!=='204'){
+          yaml+=`          content:\n            application/json:\n              schema:\n                type: object\n`;
+        }
+        yaml+=`        "400":\n          description: "Bad Request"\n        "500":\n          description: "Internal Server Error"\n`;
+      }
+    }
+  }
+  document.getElementById('yamlOutput').textContent=yaml;
+}
+
+function renderEndpoints(){
+  const list=document.getElementById('endpointList');
+  list.innerHTML=endpoints.map((ep,i)=>`
+    <div class="bg-gray-800 rounded px-3 py-2 flex items-center gap-2 text-sm">
+      <span class="font-bold ${METHOD_COLORS[ep.method]||''} uppercase w-14">${esc(ep.method)}</span>
+      <span class="font-mono flex-1 truncate">${esc(ep.path)}</span>
+      <button data-idx="${i}" class="del-ep text-red-400 hover:text-red-300 text-xs">✕</button>
+    </div>
+  `).join('');
+  document.querySelectorAll('.del-ep').forEach(btn=>{
+    btn.addEventListener('click',()=>{ endpoints.splice(parseInt(btn.dataset.idx),1); renderEndpoints(); generateYaml(); });
+  });
+  generateYaml();
+}
+
+document.getElementById('addEndpoint').addEventListener('click',()=>{
+  const method=document.getElementById('method').value;
+  const path=document.getElementById('path').value.trim()||'/';
+  const summary=document.getElementById('summary').value.trim()||path;
+  const respCode=document.getElementById('respCode').value;
+  endpoints.push({method,path,summary,respCode});
+  renderEndpoints();
+});
+
+['apiTitle','apiVersion','baseUrl','auth'].forEach(id=>document.getElementById(id).addEventListener('input',generateYaml));
+
+document.getElementById('copyYaml').addEventListener('click',()=>navigator.clipboard.writeText(document.getElementById('yamlOutput').textContent));
+document.getElementById('dlYaml').addEventListener('click',()=>{
+  const a=document.createElement('a');
+  a.href='data:text/yaml;charset=utf-8,'+encodeURIComponent(document.getElementById('yamlOutput').textContent);
+  a.download='openapi.yaml'; a.click();
+});
+
+// Add default endpoints
+endpoints=[{method:'get',path:'/users',summary:'ユーザー一覧',respCode:'200'},{method:'post',path:'/users',summary:'ユーザー作成',respCode:'201'},{method:'get',path:'/users/{id}',summary:'ユーザー取得',respCode:'200'},{method:'delete',path:'/users/{id}',summary:'ユーザー削除',respCode:'204'}];
+renderEndpoints();
+</script>
+</body>
+</html>
